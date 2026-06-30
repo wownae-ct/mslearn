@@ -1,0 +1,74 @@
+# ===== Secrets / environment =====
+# Ignore all real env files, but keep the example templates
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets.json
+appsettings.local.json
+
+# ===== Virtual environments =====
+labenv/
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+uplevelenv/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints
+
+# ===== .NET (lab files include C#) =====
+bin/
+obj/
+*.sln.user
+
+# ===== IDE / editor =====
+.vscode/settings.json
+.vscode/launch.json
+.idea/
+*.swp
+*.swo
+*~
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== Logs / temp / output =====
+*.log
+*.bak
+*.backup
+*.tmp
+.azure/
+analysis_results.json
+output.txt
