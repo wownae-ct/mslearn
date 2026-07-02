@@ -1,8 +1,6 @@
 import csv
 import os
 import re
-import traceback
-from datetime import datetime
 
 import numpy as np
 from azure.ai.documentintelligence import DocumentIntelligenceClient
@@ -11,7 +9,6 @@ from azure.ai.documentintelligence.models import (
     DocumentAnalysisFeature,
 )
 from azure.core.credentials import AzureKeyCredential
-from azure.core.exceptions import ClientAuthenticationError, HttpResponseError
 from azure.storage.blob import ContainerClient
 from dotenv import load_dotenv
 
@@ -24,59 +21,10 @@ key = os.environ.get("YOUR_FORM_RECOGNIZER_KEY")
 sas_token = os.environ.get("AZURE_CONTAINER_SAS_TOKEN")
 blob_endpoint = os.environ.get("AZURE_BLOB_CONTAINER_URL")
 
-print("=" * 60)
-print("[DEBUG] 환경변수 로드 상태")
-print("=" * 60)
 print("Document-Intelligence 엔드포인트:", endpoint)
 print("키 로드 성공 여부:", bool(key))
 print("SAS 토큰 로드 성공 여부:", bool(sas_token))
 print("블롭 스토리지 URL 로드 성공 여부:", bool(blob_endpoint))
-
-# 🌟 [추가] 필수 환경변수가 하나라도 비어있으면 여기서 바로 명확하게 죽여서
-#     "왜 안 되는지 모르겠다"는 상황 자체를 방지
-_missing = [
-    name
-    for name, val in [
-        ("YOUR_FORM_RECOGNIZER_ENDPOINT", endpoint),
-        ("YOUR_FORM_RECOGNIZER_KEY", key),
-        ("AZURE_CONTAINER_SAS_TOKEN", sas_token),
-        ("AZURE_BLOB_CONTAINER_URL", blob_endpoint),
-    ]
-    if not val
-]
-if _missing:
-    raise SystemExit(
-        f"[FATAL] .env에서 다음 값을 못 읽었습니다: {_missing}\n"
-        f"  -> .env 파일 경로/이름, 실행 위치(cwd)를 확인하세요."
-    )
-
-# 🌟 [추가] SAS 토큰 만료 시각 미리 파싱해서 경고
-#     SAS 토큰 쿼리스트링에는 보통 'se=' (signed expiry) 파라미터가 들어있습니다.
-_se_match = re.search(r"se=([^&]+)", sas_token)
-if _se_match:
-    try:
-        # URL 인코딩된 콜론(%3A) 등을 풀어서 파싱
-        from urllib.parse import unquote
-
-        expiry_str = unquote(_se_match.group(1))
-        expiry_dt = datetime.fromisoformat(expiry_str.replace("Z", "+00:00"))
-        now = datetime.now(expiry_dt.tzinfo)
-        print(f"[DEBUG] SAS 토큰 만료 시각: {expiry_dt.isoformat()}")
-        if now >= expiry_dt:
-            print(
-                f"⚠️  [경고] SAS 토큰이 이미 만료되었습니다! "
-                f"(만료: {expiry_dt.isoformat()}, 현재: {now.isoformat()})\n"
-                f"    -> Azure Portal에서 새 SAS 토큰을 발급받아 .env를 갱신하세요."
-            )
-        else:
-            remaining = expiry_dt - now
-            print(f"[DEBUG] SAS 토큰 남은 유효시간: {remaining}")
-    except Exception as parse_err:
-        print(f"[DEBUG] SAS 만료시각 파싱 실패(무시 가능): {parse_err!r}")
-else:
-    print("[DEBUG] SAS 토큰에서 만료시각(se=) 파라미터를 찾지 못함")
-
-print("=" * 60)
 
 
 def format_bounding_box(bounding_box):
@@ -88,28 +36,31 @@ def format_bounding_box(bounding_box):
 
 def save_to_individual_csv(file_name, fieldnames, rows_data):
     if not rows_data:
-        print(f"[DEBUG] '{file_name}' 처리 결과 rows_data가 비어있어 CSV를 만들지 않음")
         return
 
-    output_dir = "document-inteligence/data"
+    output_dir = "document-intelligence/data"
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-        print(f"[DEBUG] 출력 디렉토리 생성: {output_dir}")
 
     pure_name, _ = os.path.splitext(file_name)
     output_csv_path = os.path.join(output_dir, f"{pure_name}_result.csv")
 
     with open(output_csv_path, mode="w", encoding="utf-8-sig", newline="") as f:
+        # extrasaction="ignore": 쿼리필드 행이 섞여 들어와도 정의되지 않은 키는 무시
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows_data)
-    print(f"💾 [개별 저장 완료] '{output_csv_path}' 파일이 생성되었습니다. (행 개수: {len(rows_data)})")
+    print(f"💾 [개별 저장 완료] '{output_csv_path}' 파일이 생성되었습니다.")
 
 
 # ============================================================
 # 🌟 공통 유틸: 모든 모델이 query_fields를 옵션으로 수락하기 위한 공통 인자 처리
 # ============================================================
 def sanitize_query_field_name(name):
+    """Azure Query Fields 이름 규칙(^[\\p{L}\\p{M}\\p{N}_]{1,64}$)에 맞게 정규화한다.
+    공백/특수문자가 섞인 자연어 질문("프로젝트 이름")을 그대로 넘기면
+    'InvalidParameter: queryFields is invalid' 에러가 나므로,
+    공백은 밑줄로 바꾸고 그 외 허용되지 않는 문자는 제거한다."""
     normalized = re.sub(r"\s+", "_", name.strip())
     normalized = "".join(ch for ch in normalized if ch.isalnum() or ch == "_")
     return (normalized or "field")[:64]
@@ -122,6 +73,8 @@ def sanitize_query_fields(query_fields):
 
 
 def build_analyze_kwargs(model_id, form_url, query_fields=None):
+    """model_id/body는 항상 동일한 형태로 구성하고,
+    query_fields가 있을 때만 QUERY_FIELDS 기능과 query_fields kwarg를 추가한다."""
     kwargs = {
         "model_id": model_id,
         "body": AnalyzeDocumentRequest(url_source=form_url),
@@ -129,19 +82,19 @@ def build_analyze_kwargs(model_id, form_url, query_fields=None):
     if query_fields:
         kwargs["features"] = [DocumentAnalysisFeature.QUERY_FIELDS]
         kwargs["query_fields"] = query_fields
-    print(f"[DEBUG] build_analyze_kwargs: model_id={model_id}, query_fields={query_fields}")
     return kwargs
 
 
 def extract_query_field_rows(result, query_fields, row_builder):
+    """모든 prebuilt 모델 공통: result.documents[].fields 에서 질의응답 결과를 뽑아
+    각 모델의 CSV 스키마에 맞는 dict로 변환해 반환한다.
+    query_fields가 없거나, 해당 모델 결과에 documents/fields가 없으면 조용히 빈 리스트를 반환한다
+    (예: prebuilt-read는 documents가 없으므로 자동으로 스킵됨)."""
     rows = []
     if not query_fields:
         return rows
 
-    docs = getattr(result, "documents", []) or []
-    print(f"[DEBUG] extract_query_field_rows: documents 개수={len(docs)}")
-
-    for doc in docs:
+    for doc in getattr(result, "documents", []) or []:
         fields_dict = getattr(doc, "fields", {}) or {}
         for q_field in query_fields:
             field_data = fields_dict.get(q_field)
@@ -150,15 +103,11 @@ def extract_query_field_rows(result, query_fields, row_builder):
                 rows.append(
                     row_builder(q_field, field_data.content, field_data.confidence)
                 )
-            else:
-                # 🌟 [추가] 왜 이 필드가 안 뽑혔는지 원인 추적용
-                print(f"[DEBUG] 쿼리필드 '{q_field}' 응답 없음 (field_data={field_data})")
     return rows
 
 
 # --- [모델 1] Prebuilt-Invoice 분석 및 CSV 저장 로직 ---
 def analyze_invoice_model(client, form_url, file_name, query_fields=None):
-    print(f"[DEBUG] analyze_invoice_model 시작: {file_name}")
     poller = client.begin_analyze_document(
         **build_analyze_kwargs("prebuilt-invoice", form_url, query_fields)
     )
@@ -166,7 +115,6 @@ def analyze_invoice_model(client, form_url, file_name, query_fields=None):
 
     file_rows = []
     docs_list = getattr(invoices, "documents", [])
-    print(f"[DEBUG] invoice documents 개수: {len(docs_list)}")
     for idx, invoice in enumerate(docs_list):
         print("--------Recognizing invoice #{}--------".format(idx + 1))
 
@@ -207,6 +155,7 @@ def analyze_invoice_model(client, form_url, file_name, query_fields=None):
                 }
             )
 
+    # 🌟 공통 쿼리필드 결과 병합 (invoice 스키마 그대로 활용)
     file_rows.extend(
         extract_query_field_rows(
             invoices,
@@ -224,16 +173,13 @@ def analyze_invoice_model(client, form_url, file_name, query_fields=None):
 
 # --- [모델 2] Prebuilt-Read 분석 및 CSV 저장 로직 ---
 def analyze_read_model(client, form_url, file_name, query_fields=None):
-    print(f"[DEBUG] analyze_read_model 시작: {file_name}")
     poller = client.begin_analyze_document(
         **build_analyze_kwargs("prebuilt-read", form_url, query_fields)
     )
     result = poller.result()
 
     file_rows = []
-    pages = getattr(result, "pages", [])
-    print(f"[DEBUG] read pages 개수: {len(pages)}")
-    for page in pages:
+    for page in getattr(result, "pages", []):
         print("----Analyzing Read from page #{}----".format(page.page_number))
         for line_idx, line in enumerate(getattr(page, "lines", [])):
             text_content = getattr(line, "content", "")
@@ -246,6 +192,9 @@ def analyze_read_model(client, form_url, file_name, query_fields=None):
                 }
             )
 
+    # 🌟 공통 쿼리필드 결과 병합
+    # 참고: prebuilt-read는 Azure 측에서 QUERY_FIELDS add-on 자체를 지원하지 않아
+    # result.documents가 비어 있으므로, 실제로는 아무 행도 추가되지 않고 조용히 넘어간다.
     file_rows.extend(
         extract_query_field_rows(
             result,
@@ -259,7 +208,6 @@ def analyze_read_model(client, form_url, file_name, query_fields=None):
 
 # --- [모델 3] Prebuilt-Layout 분석 및 CSV 저장 로직 (텍스트+표 전수 추출 + 쿼리필드) ---
 def analyze_document_model(client, form_url, file_name, query_fields=None):
-    print(f"[DEBUG] analyze_document_model(layout) 시작: {file_name}")
     poller = client.begin_analyze_document(
         **build_analyze_kwargs("prebuilt-layout", form_url, query_fields)
     )
@@ -269,7 +217,6 @@ def analyze_document_model(client, form_url, file_name, query_fields=None):
 
     print("----Paragraphs found in document----")
     paragraphs = getattr(result, "paragraphs", [])
-    print(f"[DEBUG] paragraphs 개수: {len(paragraphs)}")
     for p_idx, paragraph in enumerate(paragraphs):
         content = getattr(paragraph, "content", "")
         role = getattr(paragraph, "role", "Text")
@@ -285,7 +232,6 @@ def analyze_document_model(client, form_url, file_name, query_fields=None):
 
     print("----Tables found in document----")
     tables = getattr(result, "tables", [])
-    print(f"[DEBUG] tables 개수: {len(tables)}")
     if tables:
         for t_idx, table in enumerate(tables):
             print(f"  📊 Table #{t_idx + 1} ({table.row_count}x{table.column_count})")
@@ -301,6 +247,7 @@ def analyze_document_model(client, form_url, file_name, query_fields=None):
     else:
         print("추출된 표가 없습니다.")
 
+    # 🌟 공통 쿼리필드 결과 병합 (layout 스키마에 신뢰도 컬럼을 추가로 확장)
     file_rows.extend(
         extract_query_field_rows(
             result,
@@ -321,16 +268,13 @@ def analyze_document_model(client, form_url, file_name, query_fields=None):
 
 # --- [모델 5] Prebuilt-Receipt 분석 및 CSV 저장 로직 (영수증 전용) ---
 def analyze_receipt_model(client, form_url, file_name, query_fields=None):
-    print(f"[DEBUG] analyze_receipt_model 시작: {file_name}")
     poller = client.begin_analyze_document(
         **build_analyze_kwargs("prebuilt-receipt", form_url, query_fields)
     )
     receipts = poller.result()
 
     file_rows = []
-    docs = getattr(receipts, "documents", [])
-    print(f"[DEBUG] receipt documents 개수: {len(docs)}")
-    for idx, receipt in enumerate(docs):
+    for idx, receipt in enumerate(getattr(receipts, "documents", [])):
         print("--------Recognizing receipt #{}--------".format(idx + 1))
         for field_name, attr_type in [
             ("MerchantName", "value_string"),
@@ -345,6 +289,7 @@ def analyze_receipt_model(client, form_url, file_name, query_fields=None):
             field_obj = receipt.fields.get(field_name)
             if field_obj and getattr(field_obj, attr_type, None):
                 val = getattr(field_obj, attr_type)
+                # 통화 필드(value_currency)는 amount만 뽑아서 사람이 읽기 좋게 정리
                 if attr_type == "value_currency":
                     val = getattr(val, "amount", val)
                 print(f"{field_name}: {val}")
@@ -356,6 +301,7 @@ def analyze_receipt_model(client, form_url, file_name, query_fields=None):
                     }
                 )
 
+    # 🌟 공통 쿼리필드 결과 병합 (invoice와 동일한 3컬럼 스키마 재사용)
     file_rows.extend(
         extract_query_field_rows(
             receipts,
@@ -373,16 +319,13 @@ def analyze_receipt_model(client, form_url, file_name, query_fields=None):
 
 # --- [모델 4] Prebuilt-IdDocument 분석 및 CSV 저장 로직 ---
 def analyze_id_model(client, form_url, file_name, query_fields=None):
-    print(f"[DEBUG] analyze_id_model 시작: {file_name}")
     poller = client.begin_analyze_document(
         **build_analyze_kwargs("prebuilt-idDocument", form_url, query_fields)
     )
     id_documents = poller.result()
 
     file_rows = []
-    docs = getattr(id_documents, "documents", [])
-    print(f"[DEBUG] id documents 개수: {len(docs)}")
-    for idx, id_document in enumerate(docs):
+    for idx, id_document in enumerate(getattr(id_documents, "documents", [])):
         print("--------Recognizing ID document #{}--------".format(idx + 1))
         for id_key, id_attr in [
             ("FirstName", "value_string"),
@@ -402,6 +345,7 @@ def analyze_id_model(client, form_url, file_name, query_fields=None):
                     }
                 )
 
+    # 🌟 공통 쿼리필드 결과 병합
     file_rows.extend(
         extract_query_field_rows(
             id_documents,
@@ -417,6 +361,14 @@ def analyze_id_model(client, form_url, file_name, query_fields=None):
     save_to_individual_csv(file_name, ["신분증필드", "추출데이터", "신뢰도"], file_rows)
 
 
+# --- 모델 라우팅 테이블: (모델 판별 함수) -> 실행 함수 매핑 ---
+# 🌟 [리팩토링 핵심] 더 이상 "질문 유무"로 갈라지는 별도의 모델(query-fields 전용 분기)이 없다.
+#     invoice/receipt/id/read/layout 5개 함수 모두 query_fields를 공통 kwarg로 받으므로,
+#     파일 종류에 따라 어떤 모델을 쓸지만 결정하면 되고, query_fields는 그 위에 항상 얹어서 전달한다.
+#
+# 🌟 [버그 수정] 예전 로직은 "확장자가 이미지면 무조건 ID 모델"이었다.
+#     그래서 receipt1.jpg / receipt2.jpg 같은 영수증 사진까지 전부 신분증 모델로 잘못 들어갔다.
+#     신분증 키워드를 먼저 명시적으로 좁혀서 검사하고, 영수증은 별도의 prebuilt-receipt 모델로 분리한다.
 ID_KEYWORDS = (
     "license",
     "passport",
@@ -431,6 +383,8 @@ RECEIPT_KEYWORDS = ("receipt", "영수증")
 INVOICE_KEYWORDS = ("invoice", "bill", "인보이스", "청구서", "거래명세서")
 
 
+# "ID1.jpg", "id_2.png" 처럼 파일명 전체가 "id + 숫자"로만 구성된 경우까지 잡아내기 위한 헬퍼.
+# (밑줄/하이픈으로 나눈 토큰 단위 검사라 "invoice", "video" 같은 단어는 걸리지 않는다)
 def looks_like_id_filename(pure_name):
     tokens = re.split(r"[_\-]", pure_name)
     return any(
@@ -449,76 +403,35 @@ def select_model_func(lower_name, ext):
         return "[모델 4] ID Document(신분증)", analyze_id_model
     if ext == ".pdf" or "form" in lower_name or "layout" in lower_name:
         return "[모델 3] Layout(표/문단 구조 분석)", analyze_document_model
+    # 🌟 키워드로 특정할 수 없는 이미지/기타 파일은 더 이상 무조건 ID 모델로 보내지 않고,
+    #    가장 안전한 범용 텍스트 추출(Read)로 우회한다.
     return "[모델 2] Read(일반 텍스트/OCR)", analyze_read_model
 
 
-def _mask_sas(url):
-    """SAS 토큰이 포함된 URL을 로그에 찍을 때 시크릿을 일부 가려서 출력"""
-    if "?" in url:
-        base, qs = url.split("?", 1)
-        return f"{base}?{qs[:12]}...(마스킹됨)"
-    return url
-
-
+# --- 메인 컨트롤러 ---
 def main():
-    # 🌟 [추가] 컨테이너/클라이언트 생성 및 최초 접속 자체를 별도로 감싸서
-    #     "리스트업조차 안 되는" 상황(인증/네트워크 문제)을 명확히 구분
-    print("\n[DEBUG] ContainerClient 생성 시도...")
-    try:
-        container_client = ContainerClient.from_container_url(
-            f"{blob_endpoint}?{sas_token}"
-        )
-        print("[DEBUG] ContainerClient 생성 성공")
-    except Exception:
-        print("[FATAL] ContainerClient 생성 실패. blob_endpoint/sas_token 형식을 확인하세요.")
-        traceback.print_exc()
-        raise
+    container_client = ContainerClient.from_container_url(
+        f"{blob_endpoint}?{sas_token}"
+    )
+    document_intelligence_client = DocumentIntelligenceClient(
+        endpoint=endpoint, credential=AzureKeyCredential(key)
+    )
 
-    print("[DEBUG] DocumentIntelligenceClient 생성 시도...")
-    try:
-        document_intelligence_client = DocumentIntelligenceClient(
-            endpoint=endpoint, credential=AzureKeyCredential(key)
-        )
-        print("[DEBUG] DocumentIntelligenceClient 생성 성공")
-    except Exception:
-        print("[FATAL] DocumentIntelligenceClient 생성 실패. endpoint/key를 확인하세요.")
-        traceback.print_exc()
-        raise
-
+    # 파일명 키워드로 자동 매칭되는 쿼리필드 프리셋
+    # 🌟 Azure Query Fields는 이름에 공백을 허용하지 않으므로(정규식 ^[\p{L}\p{M}\p{N}_]{1,64}$),
+    #    사람이 읽기 편하게 밑줄(_)로 이어 쓴다. (sanitize_query_fields가 한 번 더 안전하게 정규화해준다)
     TARGET_QUERIES = {
         "계획": ["프로젝트_이름", "시작_날짜", "담당자", "최종_목적"],
         "target": ["문서_제목", "발행일", "수신자"],
     }
+
+    # 🌟 필요할 때만 수동으로 채워서 자동 매칭보다 우선 적용 (예: ["프로젝트_이름", "담당자"])
     MANUAL_OVERRIDE_QUERIES = None
 
     print("\n📂 특정 컨테이너 내부 전수 조사를 시작합니다...")
-
-    # 🌟 [추가] list_blobs() 자체가 SAS 만료/권한 문제로 실패하는 경우를 명확히 잡아냄
-    try:
-        blob_list = list(container_client.list_blobs())
-        print(f"[DEBUG] 컨테이너에서 조회된 blob 개수: {len(blob_list)}")
-        if not blob_list:
-            print(
-                "⚠️  [경고] 컨테이너에서 파일이 하나도 조회되지 않았습니다. "
-                "컨테이너 경로/이름이 맞는지, 실제로 파일이 있는지 확인하세요."
-            )
-    except ClientAuthenticationError:
-        print("[FATAL] 인증 실패 (SAS 토큰이 유효하지 않거나 만료됨)")
-        traceback.print_exc()
-        return
-    except HttpResponseError as e:
-        print(f"[FATAL] Blob 목록 조회 중 HTTP 에러: status_code={getattr(e, 'status_code', None)}")
-        traceback.print_exc()
-        return
-    except Exception:
-        print("[FATAL] Blob 목록 조회 중 예상치 못한 에러")
-        traceback.print_exc()
-        return
-
     total_files_processed = 0
-    total_files_failed = 0
 
-    for blob in blob_list:
+    for blob in container_client.list_blobs():
         if blob.name.endswith("/"):
             continue
 
@@ -528,7 +441,6 @@ def main():
         print("==================================================")
 
         form_url = f"{blob_endpoint}/{blob.name}?{sas_token}"
-        print(f"[DEBUG] 요청 URL: {_mask_sas(form_url)}")
         lower_name = blob.name.lower()
         _, ext = os.path.splitext(lower_name)
 
@@ -538,6 +450,10 @@ def main():
                 active_questions = q_list
                 break
 
+        # 🌟 [리팩토링] query_fields는 모델 선택과 완전히 분리된 공통 인자다.
+        #     어떤 모델이 선택되든 동일하게 얹어서 전달하면 되므로, 별도의 분기(elif)가 필요 없다.
+        # 🌟 API로 넘기기 직전에 딱 한 곳에서 정규화 → build_analyze_kwargs(전송)와
+        #     extract_query_field_rows(결과 조회)가 항상 같은 이름을 참조하게 된다.
         query_fields = sanitize_query_fields(
             MANUAL_OVERRIDE_QUERIES or active_questions
         )
@@ -556,25 +472,14 @@ def main():
             )
 
             print("\n----------------------------------------")
-        except HttpResponseError as e:
-            # 🌟 [추가] Azure 쪽에서 명시적으로 던지는 HTTP 에러는 상태코드/에러코드까지 출력
-            total_files_failed += 1
+        except Exception as e:
             print(
-                f"❌ [HttpResponseError] 파일 [{blob.name}] 분석 실패: "
-                f"status_code={getattr(e, 'status_code', None)}, "
-                f"error_code={getattr(getattr(e, 'error', None), 'code', None)}"
+                f"❌ 파일 [{blob.name}] 분석 중 예상치 못한 포맷 거부 에러 발생 (스킵): {e}"
             )
-            traceback.print_exc()
-        except Exception:
-            # 🌟 [수정] 기존엔 str(e)만 찍어서 원인을 알 수 없었음 -> 전체 스택트레이스 출력
-            total_files_failed += 1
-            print(f"❌ 파일 [{blob.name}] 분석 중 예상치 못한 에러 발생 (스킵)")
-            traceback.print_exc()
 
     print("\n==================================================")
     print(
-        f"🎉 [SUCCESS] 모든 파일 처리가 끝났습니다. "
-        f"총 {total_files_processed}개 시도, 실패 {total_files_failed}개."
+        f"🎉 [SUCCESS] 모든 파일 처리가 끝났습니다. 총 {total_files_processed}개의 파일을 분석했습니다."
     )
     print("==================================================")
 
