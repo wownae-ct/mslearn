@@ -1,0 +1,4 @@
+﻿신분증필드,추출데이터,신뢰도
+FirstName,길순,0.628
+LastName,홍,0.595
+DocumentNumber,820701-2,0.598

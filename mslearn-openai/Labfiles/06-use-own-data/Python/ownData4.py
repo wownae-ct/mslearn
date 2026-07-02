@@ -1,10 +1,9 @@
 import os
-import json
-from dotenv import load_dotenv
 
-from openai import AzureOpenAI
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
+from dotenv import load_dotenv
+from openai import AzureOpenAI
 
 # ----------------------------------------------------------------------------
 # 이 스크립트는 Azure OpenAI "On Your Data" 확장(extensions/chat/completions)을

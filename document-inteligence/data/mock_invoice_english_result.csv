@@ -1,0 +1,9 @@
+﻿항목,데이터,신뢰도
+VendorName,"Northwind Trading Co., Ltd.",0.656
+VendorAddress,"{'houseNumber': '128', 'road': 'Harborview Avenue', 'postalCode': '98101', 'city': 'Seattle', 'state': 'WA', 'countryRegion': 'USA', 'streetAddress': '128 Harborview Avenue Suite 400', 'unit': 'Suite 400'}",0.878
+CustomerName,"Cascade Retail Group Inc.
+Attn: Accounts Payable",0.885
+InvoiceId,INV-2026-004821,0.945
+InvoiceDate,2026-06-18,0.925
+DueDate,2026-07-18,0.923
+InvoiceTotal,7181.75,0.415

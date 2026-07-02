@@ -1,0 +1,306 @@
+"""
+This code sample shows Prebuilt Invoice operations with the Azure AI Document Intelligence client library.
+The async versions of the samples require Python 3.8 or later.
+
+To learn more, please visit the documentation - Quickstart: Document Intelligence (formerly Form Recognizer) SDKs
+https://learn.microsoft.com/azure/ai-services/document-intelligence/quickstarts/get-started-sdks-rest-api?pivots=programming-language-python
+"""
+
+from azure.core.credentials import AzureKeyCredential
+from azure.ai.documentintelligence import DocumentIntelligenceClient
+from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
+from azure.storage.blob import ContainerClient 
+import os
+from dotenv import load_dotenv
+
+# .env 파일 로드
+load_dotenv()
+
+# 환경변수에서 값 읽어오기
+doc_endpoint = os.environ.get("YOUR_FORM_RECOGNIZER_ENDPOINT")
+key = os.environ.get("YOUR_FORM_RECOGNIZER_KEY")
+sas_token = os.environ.get("AZURE_CONTAINER_SAS_TOKEN")
+blob_endpoint = os.environ.get("AZURE_BLOB_CONTAINER_URL")
+
+print("Document-Intelligence 엔드포인트:", doc_endpoint)
+print("키 로드 성공 여부:", bool(key))
+print("SAS 토큰 로드 성공 여부:", bool(sas_token))
+print("블롭 스토리지 URL 로드 성공 여부:", bool(blob_endpoint))
+
+# 🌟 1. 코드 자체적으로 특정 컨테이너와 SAS 토큰을 엮어 내부 명단을 읽을 준비를 합니다.
+container_client = ContainerClient.from_container_url(f"{blob_endpoint}?{sas_token}")
+
+document_intelligence_client = DocumentIntelligenceClient(
+    endpoint=doc_endpoint, credential=AzureKeyCredential(key)
+)
+
+print(f"\n📂 컨테이너 안의 파일들을 순회 분석 시작합니다...")
+
+# 🌟 2. 파이썬이 컨테이너 내부의 파일(Blob) 이름 목록을 루프로 하나씩 가져옵니다.
+for blob in container_client.list_blobs():
+    # 가상 폴더 구조를 제외한 실제 파일만 처리
+    if blob.name.endswith('/'):
+        continue
+        
+    print(f"\n⚡ 현재 분석 중인 파일명: {blob.name}")
+    
+    # 🌟 3. 파일 목록에서 가져온 '파일명'을 중간에 정확히 조립하여 단일 파일 타깃 URL을 완성합니다.
+    formUrl = f"{blob_endpoint}/{blob.name}?{sas_token}"
+    
+    # API 요청을 보냅니다.
+    poller = document_intelligence_client.begin_analyze_document(
+        "prebuilt-invoice", AnalyzeDocumentRequest(url_source=formUrl)
+    )
+    invoices = poller.result()
+
+    for idx, invoice in enumerate(invoices.documents):
+        print("--------Recognizing invoice #{}--------".format(idx + 1))
+        vendor_name = invoice.fields.get("VendorName")
+        if vendor_name:
+            print(
+                "Vendor Name: {} has confidence: {}".format(
+                    vendor_name.value_string, vendor_name.confidence
+                )
+            )
+        vendor_address = invoice.fields.get("VendorAddress")
+        if vendor_address:
+            print(
+                "Vendor Address: {} has confidence: {}".format(
+                    vendor_address.value_address, vendor_address.confidence
+                )
+            )
+        vendor_address_recipient = invoice.fields.get("VendorAddressRecipient")
+        if vendor_address_recipient:
+            print(
+                "Vendor Address Recipient: {} has confidence: {}".format(
+                    vendor_address_recipient.value_string,
+                    vendor_address_recipient.confidence,
+                )
+            )
+        customer_name = invoice.fields.get("CustomerName")
+        if customer_name:
+            print(
+                "Customer Name: {} has confidence: {}".format(
+                    customer_name.value_string, customer_name.confidence
+                )
+            )
+        customer_id = invoice.fields.get("CustomerId")
+        if customer_id:
+            print(
+                "Customer Id: {} has confidence: {}".format(
+                    customer_id.value_string, customer_id.confidence
+                )
+            )
+        customer_address = invoice.fields.get("CustomerAddress")
+        if customer_address:
+            print(
+                "Customer Address: {} has confidence: {}".format(
+                    customer_address.value_address, customer_address.confidence
+                )
+            )
+        customer_address_recipient = invoice.fields.get("CustomerAddressRecipient")
+        if customer_address_recipient:
+            print(
+                "Customer Address Recipient: {} has confidence: {}".format(
+                    customer_address_recipient.value_string,
+                    customer_address_recipient.confidence,
+                )
+            )
+        invoice_id = invoice.fields.get("InvoiceId")
+        if invoice_id:
+            print(
+                "Invoice Id: {} has confidence: {}".format(
+                    invoice_id.value_string, invoice_id.confidence
+                )
+            )
+        invoice_date = invoice.fields.get("InvoiceDate")
+        if invoice_date:
+            print(
+                "Invoice Date: {} has confidence: {}".format(
+                    invoice_date.value_date, invoice_date.confidence
+                )
+            )
+        invoice_total = invoice.fields.get("InvoiceTotal")
+        if invoice_total:
+            print(
+                "Invoice Total: {} has confidence: {}".format(
+                    invoice_total.value_currency.amount, invoice_total.confidence
+                )
+            )
+        due_date = invoice.fields.get("DueDate")
+        if due_date:
+            print(
+                "Due Date: {} has confidence: {}".format(
+                    due_date.value_date, due_date.confidence
+                )
+            )
+        purchase_order = invoice.fields.get("PurchaseOrder")
+        if purchase_order:
+            print(
+                "Purchase Order: {} has confidence: {}".format(
+                    purchase_order.value_string, purchase_order.confidence
+                )
+            )
+        billing_address = invoice.fields.get("BillingAddress")
+        if billing_address:
+            print(
+                "Billing Address: {} has confidence: {}".format(
+                    billing_address.value_address, billing_address.confidence
+                )
+            )
+        billing_address_recipient = invoice.fields.get("BillingAddressRecipient")
+        if billing_address_recipient:
+            print(
+                "Billing Address Recipient: {} has confidence: {}".format(
+                    billing_address_recipient.value_string,
+                    billing_address_recipient.confidence,
+                )
+            )
+        shipping_address = invoice.fields.get("ShippingAddress")
+        if shipping_address:
+            print(
+                "Shipping Address: {} has confidence: {}".format(
+                    shipping_address.value_address, shipping_address.confidence
+                )
+            )
+        shipping_address_recipient = invoice.fields.get("ShippingAddressRecipient")
+        if shipping_address_recipient:
+            print(
+                "Shipping Address Recipient: {} has confidence: {}".format(
+                    shipping_address_recipient.value_string,
+                    shipping_address_recipient.confidence,
+                )
+            )
+        print("Invoice items:")
+        for idx, item in enumerate(invoice.fields.get("Items").value_array):
+            print("...Item #{}".format(idx + 1))
+            item_description = item.value_object.get("Description")
+            if item_description:
+                print(
+                    "......Description: {} has confidence: {}".format(
+                        item_description.value_string, item_description.confidence
+                    )
+                )
+            item_quantity = item.value_object.get("Quantity")
+            if item_quantity:
+                print(
+                    "......Quantity: {} has confidence: {}".format(
+                        item_quantity.value_number, item_quantity.confidence
+                    )
+                )
+            unit = item.value_object.get("Unit")
+            if unit:
+                print(
+                    "......Unit: {} has confidence: {}".format(
+                        unit.value_number, unit.confidence
+                    )
+                )
+            unit_price = item.value_object.get("UnitPrice")
+            if unit_price:
+                print(
+                    "......Unit Price: {} has confidence: {}".format(
+                        unit_price.value_currency.amount, unit_price.confidence
+                    )
+                )
+            product_code = item.value_object.get("ProductCode")
+            if product_code:
+                print(
+                    "......Product Code: {} has confidence: {}".format(
+                        product_code.value_string, product_code.confidence
+                    )
+                )
+            item_date = item.value_object.get("Date")
+            if item_date:
+                print(
+                    "......Date: {} has confidence: {}".format(
+                        item_date.value_date, item_date.confidence
+                    )
+                )
+            tax = item.value_object.get("Tax")
+            if tax:
+                print(
+                    "......Tax: {} has confidence: {}".format(
+                        tax.value_string, tax.confidence
+                    )
+                )
+            amount = item.value_object.get("Amount")
+            if amount:
+                print(
+                    "......Amount: {} has confidence: {}".format(
+                        amount.value_currency.amount, amount.confidence
+                    )
+                )
+        subtotal = invoice.fields.get("SubTotal")
+        if subtotal:
+            print(
+                "Subtotal: {} has confidence: {}".format(
+                    subtotal.value_currency.amount, subtotal.confidence
+                )
+            )
+        total_tax = invoice.fields.get("TotalTax")
+        if total_tax:
+            print(
+                "Total Tax: {} has confidence: {}".format(
+                    total_tax.value_currency.amount, total_tax.confidence
+                )
+            )
+        previous_unpaid_balance = invoice.fields.get("PreviousUnpaidBalance")
+        if previous_unpaid_balance:
+            print(
+                "Previous Unpaid Balance: {} has confidence: {}".format(
+                    previous_unpaid_balance.value_currency.amount,
+                    previous_unpaid_balance.confidence,
+                )
+            )
+        amount_due = invoice.fields.get("AmountDue")
+        if amount_due:
+            print(
+                "Amount Due: {} has confidence: {}".format(
+                    amount_due.value_currency.amount, amount_due.confidence
+                )
+            )
+        service_start_date = invoice.fields.get("ServiceStartDate")
+        if service_start_date:
+            print(
+                "Service Start Date: {} has confidence: {}".format(
+                    service_start_date.value_date, service_start_date.confidence
+                )
+            )
+        service_end_date = invoice.fields.get("ServiceEndDate")
+        if service_end_date:
+            print(
+                "Service End Date: {} has confidence: {}".format(
+                    service_end_date.value_date, service_end_date.confidence
+                )
+            )
+        service_address = invoice.fields.get("ServiceAddress")
+        if service_address:
+            print(
+                "Service Address: {} has confidence: {}".format(
+                    service_address.value_address, service_address.confidence
+                )
+            )
+        service_address_recipient = invoice.fields.get("ServiceAddressRecipient")
+        if service_address_recipient:
+            print(
+                "Service Address Recipient: {} has confidence: {}".format(
+                    service_address_recipient.value_string,
+                    service_address_recipient.confidence,
+                )
+            )
+        remittance_address = invoice.fields.get("RemittanceAddress")
+        if remittance_address:
+            print(
+                "Remittance Address: {} has confidence: {}".format(
+                    remittance_address.value_address, remittance_address.confidence
+                )
+            )
+        remittance_address_recipient = invoice.fields.get("RemittanceAddressRecipient")
+        if remittance_address_recipient:
+            print(
+                "Remittance Address Recipient: {} has confidence: {}".format(
+                    remittance_address_recipient.value_string,
+                    remittance_address_recipient.confidence,
+                )
+            )
+        print("----------------------------------------")

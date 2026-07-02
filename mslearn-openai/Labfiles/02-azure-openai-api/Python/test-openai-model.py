@@ -1,4 +1,5 @@
 import os
+
 from dotenv import load_dotenv
 
 # Add Azure OpenAI package
@@ -41,7 +42,7 @@ def main():
                 messages_array = [
                     {"role": "system", "content": system_message},]
 
-                print(f"\nAnswer: 초기화 되었습니다. \n")
+                print("\nAnswer: 초기화 되었습니다. \n")
                 continue
 
                 # 챗봇 재호출
@@ -59,7 +60,7 @@ def main():
                     {"role": "assistant", "content": generated_text})
 
                 # 8. 챗봇 메시지 출력
-                print(f"\n=================================")
+                print("\n=================================")
                 print(f"\nAnswer: {generated_text} \n")
                 print(messages_array[:])
 
@@ -85,7 +86,7 @@ def main():
                     {"role": "assistant", "content": generated_text})
 
                 # 8. 챗봇 메시지 출력
-                print(f"\n=================================")
+                print("\n=================================")
                 print(f"\nAnswer: {generated_text} \n")
 
                 # print(messages_array[:])  # 질문 및 응답 컨텍스트 리스트에 저장된 것 확인

@@ -72,3 +72,11 @@ Thumbs.db
 .azure/
 analysis_results.json
 output.txt
+
+# ===== 개인 파일 (공개 repo 제외) =====
+# 녹음 파일
+*.m4a
+# 개인 발표자료 / 계획 문서 및 그 OCR 결과
+안전해라 머리머리 발표자료.pdf
+로컬_RAG_에이전트_연습_계획.pdf
+로컬_RAG_에이전트_연습_계획_result.csv

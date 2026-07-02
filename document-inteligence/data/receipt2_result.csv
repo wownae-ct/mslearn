@@ -1,0 +1,7 @@
+﻿항목,데이터,신뢰도
+MerchantName,뉴브레인 심리상담센,0.981
+MerchantAddress,"{'houseNumber': '320', 'road': '퇴계로', 'city': '광희동2가', 'streetAddress': '320 퇴계로', 'house': '서울 중구'}",0.989
+MerchantPhoneNumber,+823399301893,0.995
+TransactionDate,2026-05-30,0.995
+TransactionTime,11:48:57,0.995
+Total,56000.0,0.995
